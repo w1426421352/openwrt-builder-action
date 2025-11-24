@@ -70,14 +70,21 @@ jobs:
         run: |
           cd plugin_repo
 
-          # 搜索全部 PKG_NAME
-          PKGS=$(grep -R "PKG_NAME:=" -h */Makefile */*/Makefile 2>/dev/null \
-            | awk -F':=' '{print $2}' \
-            | tr -d ' ' \
-            | tr '\n' ' ')
+          # 递归查找所有 Makefile（包括根目录）
+          MAKEFILES=$(find . -name Makefile)
+
+          PKGS=""
+          for mk in $MAKEFILES; do
+            NAME=$(grep -E '^PKG_NAME *:=' "$mk" | awk -F':=' '{print $2}' | tr -d ' ')
+            if [[ -n "$NAME" ]]; then
+              PKGS="$PKGS $NAME"
+            fi
+          done
+
+          PKGS=$(echo $PKGS | xargs)
 
           if [[ -z "$PKGS" ]]; then
-            echo "❌ ERROR: 未在插件仓库中找到任何 PKG_NAME，请检查 Makefile"
+            echo "❌ ERROR: 找不到 PKG_NAME，请检查插件仓库"
             exit 1
           fi
 
