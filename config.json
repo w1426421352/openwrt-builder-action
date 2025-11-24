@@ -1,4 +1,4 @@
 {
-  "openwrt_version": "openwrt-24.10",   // OpenWrt 版本（比如 openwrt-21.02）
-  "plugin_repo": "https://github.com/honwen/luci-app-aliddns.git" // 插件仓库的 URL
+  "openwrt_version": "openwrt-24.10",
+  "plugin_repo": "https://github.com/honwen/luci-app-aliddns.git"
 }
