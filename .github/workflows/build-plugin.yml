@@ -1,19 +1,19 @@
 name: Build OpenWrt Plugin
 
 on:
-  workflow_dispatch:  # 手动触发，但不需要输入任何内容
+  workflow_dispatch:  # 手动触发，用户无需输入内容
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout OpenWrt repository (using the sdk to fetch the version)
+      # Checkout OpenWrt repository
       - name: Checkout OpenWrt repository
-        uses: openwrt/gh-action-sdk@main
+        uses: actions/checkout@v2
         with:
-          branch: ${{ env.OPENWRT_VERSION }}
-          
+          fetch-depth: 0
+
       # Read config.json to get OpenWrt version and plugin repository URL
       - name: Read config.json
         id: config
@@ -26,21 +26,13 @@ jobs:
           echo "OPENWRT_VERSION=${OPENWRT_VERSION}" >> $GITHUB_ENV
           echo "PLUGIN_REPO=${PLUGIN_REPO}" >> $GITHUB_ENV
 
-      # Add the plugin repository to feeds.conf.default
-      - name: Add custom plugin repository
-        run: |
-          echo "src-git custom ${{ env.PLUGIN_REPO }}" >> feeds.conf.default
-
-      # Update feeds and install plugins
-      - name: Update feeds and install plugins
-        run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-
-      # Compile the plugin (replace with actual plugin path)
-      - name: Compile Plugin
-        run: |
-          make package/your-plugin-name/compile -j$(nproc)
+      # Build the OpenWrt package using the SDK
+      - name: Build OpenWrt Plugin
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: x86_64  # Change as per your target architecture (e.g., x86_64, mips_24kc)
+          OPENWRT_VERSION: ${{ env.OPENWRT_VERSION }}  # Use version from config.json
+          EXTRA_FEEDS: ${{ env.PLUGIN_REPO }}  # Add the plugin repository URL to feeds.conf
 
       # Upload the compiled plugin as an artifact
       - name: Upload plugin artifact
