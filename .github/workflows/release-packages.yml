@@ -5,7 +5,6 @@ on:
 
 jobs:
   release:
-    name: ${{ matrix.arch }} release
     runs-on: ubuntu-latest
     continue-on-error: true
 
@@ -34,6 +33,61 @@ jobs:
           - mips64_octeonplus
           - i386_pentium4
           - x86_64
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+
+      - name: load config.json
+        id: cfg
+        run: |
+          echo "OPENWRT_VERSION=$(jq -r '.openwrt_version' config.json)" >> $GITHUB_ENV
+
+          # 取出 plugin_repo
+          RAW_REPO=$(jq -r '.plugin_repo' config.json)
+
+          # 支持 URL 或 owner/repo
+          if [[ "$RAW_REPO" == http* ]] || [[ "$RAW_REPO" == git@* ]]; then
+            REPO_NAME=$(basename -s .git "$RAW_REPO")
+            REPO_OWNER=$(echo "$RAW_REPO" | awk -F'/' '{print $(NF-1)}' | sed 's/.git$//')
+            PLUGIN_REPO="$REPO_OWNER/$REPO_NAME"
+          else
+            PLUGIN_REPO="$RAW_REPO"
+            REPO_NAME=$(basename "$PLUGIN_REPO")
+          fi
+
+          # 插件名 = 仓库名
+          echo "PLUGIN_REPO=$PLUGIN_REPO" >> $GITHUB_ENV
+          echo "PLUGIN_NAME=$REPO_NAME" >> $GITHUB_ENV
+
+      - name: checkout plugin repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PLUGIN_REPO }}
+          path: plugin_repo
+
+      - name: build with OpenWrt SDK
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}-${{ env.OPENWRT_VERSION }}
+          FEEDNAME: custom
+          PACKAGES: ${{ env.PLUGIN_NAME }}
+          INDEX: 1
+          KEY_BUILD: ${{ secrets.KEY_BUILD }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          NO_REFRESH_CHECK: true
+
+      - name: compress output
+        run: |
+          mkdir -p output
+          tar -c -z -f output/${{ env.PLUGIN_NAME }}_${{ matrix.arch }}-${{ env.OPENWRT_VERSION }}.tar.gz \
+            -C bin/packages/${{ matrix.arch }}/custom .
+
+      - name: upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PLUGIN_NAME }}-${{ matrix.arch }}-${{ env.OPENWRT_VERSION }}
+          path: output/
 
     steps:
       - name: checkout self
