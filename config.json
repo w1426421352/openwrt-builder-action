@@ -1,4 +1,4 @@
 {
   "openwrt_version": "openwrt-24.10",
-  "plugin_repo": "https://github.com/honwen/luci-app-aliddns.git"
+  "plugin_repo": "https://github.com/nikkinikki-org/OpenWrt-nikki.git"
 }
