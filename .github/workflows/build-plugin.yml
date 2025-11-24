@@ -26,14 +26,34 @@ jobs:
           echo "OPENWRT_VERSION=${OPENWRT_VERSION}" >> $GITHUB_ENV
           echo "PLUGIN_REPO=${PLUGIN_REPO}" >> $GITHUB_ENV
 
+      # Clone OpenWrt source code
+      - name: Clone OpenWrt source code
+        run: |
+          git clone --depth=1 --branch ${{ env.OPENWRT_VERSION }} https://github.com/openwrt/openwrt.git
+        working-directory: /home/runner/work/openwrt-repo
+
       # Add plugin repository to feeds.conf.default and install feeds
       - name: Add and install feeds
         run: |
-          echo "src-git nikki ${{ env.PLUGIN_REPO }}" >> feeds.conf.default
+          echo "src-git nikki ${{ env.PLUGIN_REPO }}" >> openwrt/feeds.conf.default
+          cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       # Build the OpenWrt package using the SDK
+      - name: Build OpenWrt Plugin
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: x86_64  # Change as per your target architecture (e.g., x86_64, mips_24kc)
+          OPENWRT_VERSION: ${{ env.OPENWRT_VERSION }}  # Use version from config.json
+          EXTRA_FEEDS: ${{ env.PLUGIN_REPO }}  # Add the plugin repository URL to feeds.conf
+
+      # Upload the compiled plugin as an artifact
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-ipk
+          path: openwrt/bin/packages/*/*.ipk
       - name: Build OpenWrt Plugin
         uses: openwrt/gh-action-sdk@main
         env:
