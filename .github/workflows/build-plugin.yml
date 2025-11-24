@@ -1,0 +1,59 @@
+name: Build OpenWrt Plugin
+
+on:
+  workflow_dispatch:  # 允许手动触发
+    inputs:
+      openwrt_version:
+        description: 'OpenWrt version (e.g., openwrt-21.02)'
+        required: true
+        default: 'openwrt-21.02'
+      plugin_repo:
+        description: 'URL of the plugin repository'
+        required: true
+        default: 'https://github.com/yourusername/your-plugin-repo.git'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout OpenWrt repository (using the sdk to fetch the version)
+      - name: Checkout OpenWrt repository
+        uses: openwrt/gh-action-sdk@main
+        with:
+          branch: ${{ github.event.inputs.openwrt_version }}
+          
+      # Read config.json to get OpenWrt version and plugin repository URL
+      - name: Read config.json
+        id: config
+        run: |
+          echo "Reading config.json"
+          OPENWRT_VERSION=$(jq -r .openwrt_version config.json)
+          PLUGIN_REPO=$(jq -r .plugin_repo config.json)
+          echo "OpenWrt Version: $OPENWRT_VERSION"
+          echo "Plugin Repo: $PLUGIN_REPO"
+          echo "OPENWRT_VERSION=${OPENWRT_VERSION}" >> $GITHUB_ENV
+          echo "PLUGIN_REPO=${PLUGIN_REPO}" >> $GITHUB_ENV
+
+      # Add the plugin repository to feeds.conf.default
+      - name: Add custom plugin repository
+        run: |
+          echo "src-git custom ${{ env.PLUGIN_REPO }}" >> feeds.conf.default
+
+      # Update feeds and install plugins
+      - name: Update feeds and install plugins
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # Compile the plugin (replace with actual plugin path)
+      - name: Compile Plugin
+        run: |
+          make package/your-plugin-name/compile -j$(nproc)
+        
+      # Upload the compiled plugin as an artifact
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: plugin-ipk
+          path: bin/packages/*/*.ipk
