@@ -53,7 +53,7 @@ jobs:
         
       # Upload the compiled plugin as an artifact
       - name: Upload plugin artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: plugin-ipk
           path: bin/packages/*/*.ipk
