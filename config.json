@@ -1,4 +1,4 @@
 {
   "openwrt_version": "openwrt-24.10",
-  "plugin_repo": "https://github.com/nikkinikki-org/OpenWrt-nikki.git"
+  "plugin_repo": "nikkinikki-org/OpenWrt-nikki"
 }
