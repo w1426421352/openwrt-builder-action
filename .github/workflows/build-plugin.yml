@@ -1,7 +1,7 @@
 name: Build OpenWrt Plugin
 
 on:
-  workflow_dispatch:  # 手动触发，用户无需输入内容
+  workflow_dispatch:  # 手动触发，无需输入任何内容
 
 jobs:
   build:
@@ -26,6 +26,13 @@ jobs:
           echo "OPENWRT_VERSION=${OPENWRT_VERSION}" >> $GITHUB_ENV
           echo "PLUGIN_REPO=${PLUGIN_REPO}" >> $GITHUB_ENV
 
+      # Add plugin repository to feeds.conf.default and install feeds
+      - name: Add and install feeds
+        run: |
+          echo "src-git nikki ${{ env.PLUGIN_REPO }}" >> feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
       # Build the OpenWrt package using the SDK
       - name: Build OpenWrt Plugin
         uses: openwrt/gh-action-sdk@main
@@ -34,6 +41,12 @@ jobs:
           OPENWRT_VERSION: ${{ env.OPENWRT_VERSION }}  # Use version from config.json
           EXTRA_FEEDS: ${{ env.PLUGIN_REPO }}  # Add the plugin repository URL to feeds.conf
 
+      # Upload the compiled plugin as an artifact
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-ipk
+          path: bin/packages/*/*.ipk
       # Upload the compiled plugin as an artifact
       - name: Upload plugin artifact
         uses: actions/upload-artifact@v4
