@@ -44,7 +44,7 @@ jobs:
           echo "OPENWRT_VERSION=$(jq -r '.openwrt_version' config.json)" >> $GITHUB_ENV
           RAW_REPO=$(jq -r '.plugin_repo' config.json)
 
-          # 自动解析仓库 URL ⇒ owner/repo
+          # 自动解析仓库 URL => owner/repo
           if [[ "$RAW_REPO" == http* ]] || [[ "$RAW_REPO" == git@* ]]; then
             REPO_NAME=$(basename -s .git "$RAW_REPO")
             REPO_OWNER=$(echo "$RAW_REPO" | awk -F'/' '{print $(NF-1)}')
@@ -53,7 +53,11 @@ jobs:
             PLUGIN_REPO="$RAW_REPO"
           fi
 
+          # 用于 artifact 名称（不能含 /）
+          SANITIZED_REPO=$(echo "$PLUGIN_REPO" | tr '/' '-')
+
           echo "PLUGIN_REPO=$PLUGIN_REPO" >> $GITHUB_ENV
+          echo "SANITIZED_REPO=$SANITIZED_REPO" >> $GITHUB_ENV
 
       - name: checkout plugin repo
         uses: actions/checkout@v4
@@ -66,14 +70,14 @@ jobs:
         run: |
           cd plugin_repo
 
-          # 找到所有 PKG_NAME（真实包名）
+          # 搜索全部 PKG_NAME
           PKGS=$(grep -R "PKG_NAME:=" -h */Makefile */*/Makefile 2>/dev/null \
             | awk -F':=' '{print $2}' \
             | tr -d ' ' \
             | tr '\n' ' ')
 
           if [[ -z "$PKGS" ]]; then
-            echo "❌ ERROR: 未在插件仓库中找到任何 PKG_NAME，请检查目录结构"
+            echo "❌ ERROR: 未在插件仓库中找到任何 PKG_NAME，请检查 Makefile"
             exit 1
           fi
 
@@ -102,5 +106,5 @@ jobs:
       - name: upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.PLUGIN_REPO }}-${{ matrix.arch }}-${{ env.OPENWRT_VERSION }}
+          name: ${{ env.SANITIZED_REPO }}-${{ matrix.arch }}-${{ env.OPENWRT_VERSION }}
           path: output/
