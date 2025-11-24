@@ -35,30 +35,25 @@ jobs:
           - x86_64
 
     steps:
-      - name: checkout repository
+      - name: checkout self repo
         uses: actions/checkout@v4
 
       - name: load config.json
         id: cfg
         run: |
           echo "OPENWRT_VERSION=$(jq -r '.openwrt_version' config.json)" >> $GITHUB_ENV
-
-          # 取出 plugin_repo
           RAW_REPO=$(jq -r '.plugin_repo' config.json)
 
-          # 支持 URL 或 owner/repo
+          # 自动解析仓库 URL ⇒ owner/repo
           if [[ "$RAW_REPO" == http* ]] || [[ "$RAW_REPO" == git@* ]]; then
             REPO_NAME=$(basename -s .git "$RAW_REPO")
-            REPO_OWNER=$(echo "$RAW_REPO" | awk -F'/' '{print $(NF-1)}' | sed 's/.git$//')
+            REPO_OWNER=$(echo "$RAW_REPO" | awk -F'/' '{print $(NF-1)}')
             PLUGIN_REPO="$REPO_OWNER/$REPO_NAME"
           else
             PLUGIN_REPO="$RAW_REPO"
-            REPO_NAME=$(basename "$PLUGIN_REPO")
           fi
 
-          # 插件名 = 仓库名
           echo "PLUGIN_REPO=$PLUGIN_REPO" >> $GITHUB_ENV
-          echo "PLUGIN_NAME=$REPO_NAME" >> $GITHUB_ENV
 
       - name: checkout plugin repo
         uses: actions/checkout@v4
@@ -66,12 +61,31 @@ jobs:
           repository: ${{ env.PLUGIN_REPO }}
           path: plugin_repo
 
+      - name: detect packages from Makefiles
+        id: detect
+        run: |
+          cd plugin_repo
+
+          # 找到所有 PKG_NAME（真实包名）
+          PKGS=$(grep -R "PKG_NAME:=" -h */Makefile */*/Makefile 2>/dev/null \
+            | awk -F':=' '{print $2}' \
+            | tr -d ' ' \
+            | tr '\n' ' ')
+
+          if [[ -z "$PKGS" ]]; then
+            echo "❌ ERROR: 未在插件仓库中找到任何 PKG_NAME，请检查目录结构"
+            exit 1
+          fi
+
+          echo "检测到的包名: $PKGS"
+          echo "PACKAGES=$PKGS" >> $GITHUB_ENV
+
       - name: build with OpenWrt SDK
         uses: openwrt/gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ env.OPENWRT_VERSION }}
           FEEDNAME: custom
-          PACKAGES: ${{ env.PLUGIN_NAME }}
+          PACKAGES: ${{ env.PACKAGES }}
           INDEX: 1
           KEY_BUILD: ${{ secrets.KEY_BUILD }}
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
@@ -80,11 +94,13 @@ jobs:
       - name: compress output
         run: |
           mkdir -p output
-          tar -c -z -f output/${{ env.PLUGIN_NAME }}_${{ matrix.arch }}-${{ env.OPENWRT_VERSION }}.tar.gz \
-            -C bin/packages/${{ matrix.arch }}/custom .
+          for pkg in $PACKAGES; do
+            tar -c -z -f output/${pkg}_${{ matrix.arch }}-${{ env.OPENWRT_VERSION }}.tar.gz \
+              -C bin/packages/${{ matrix.arch }}/custom .
+          done
 
       - name: upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.PLUGIN_NAME }}-${{ matrix.arch }}-${{ env.OPENWRT_VERSION }}
+          name: ${{ env.PLUGIN_REPO }}-${{ matrix.arch }}-${{ env.OPENWRT_VERSION }}
           path: output/
