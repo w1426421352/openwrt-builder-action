@@ -40,6 +40,28 @@ jobs:
           cd /home/runner/work/openwrt-repo
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+        working-directory: /home/runner/work/openwrt-repo  # Ensure the correct directory
+
+      # Build the OpenWrt package using the SDK
+      - name: Build OpenWrt Plugin
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: x86_64  # Change as per your target architecture (e.g., x86_64, mips_24kc)
+          OPENWRT_VERSION: ${{ env.OPENWRT_VERSION }}  # Use version from config.json
+          EXTRA_FEEDS: ${{ env.PLUGIN_REPO }}  # Add the plugin repository URL to feeds.conf
+
+      # Upload the compiled plugin as an artifact
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-ipk
+          path: openwrt/bin/packages/*/*.ipk
+      - name: Add and install feeds
+        run: |
+          echo "src-git nikki ${{ env.PLUGIN_REPO }}" >> /home/runner/work/openwrt-repo/feeds.conf.default
+          cd /home/runner/work/openwrt-repo
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
 
       # Build the OpenWrt package using the SDK
       - name: Build OpenWrt Plugin
