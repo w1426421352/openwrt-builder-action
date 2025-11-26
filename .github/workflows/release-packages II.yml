@@ -1,106 +1,63 @@
-name: release-packages II
+name: release-packages
 
 on:
   workflow_dispatch:
     inputs:
       manual_override:
-        description: "manual_override: Enable manual mode? (EN: true/false; CN: 是否启用手动模式，启用后忽略 config.json)"
+        description: "Enable manual mode? (true/false) | 是否启用手动模式"
         required: false
         default: "false"
+
+      config_path:
+        description: "Path to config file (ignored if manual mode), default: config.json | 配置文件路径"
+        required: false
+        default: "config.json"
+
       manual_repos:
-        description: "manual_repos: Comma-separated owner/repo list (EN: e.g. 'owner/repo,owner2/repo2'; CN: 手动模式下的仓库列表，逗号分隔)"
+        description: "Comma-separated owner/repo list (manual mode only) | 手动模式下的仓库列表（逗号分隔）"
         required: false
         default: ""
+
       manual_versions:
-        description: "manual_versions: Comma-separated OpenWrt versions (EN: e.g. 'openwrt-24.10'; CN: 手动模式下的版本，逗号分隔)"
+        description: "Comma-separated OpenWrt versions (e.g. 24.10,23.05) | 手动模式下版本列表"
         required: false
         default: ""
+
       manual_targets:
-        description: "manual_targets: Comma-separated target arch names (EN: e.g. 'aarch64_cortex-a53,x86_64'; CN: 手动模式下的平台，逗号分隔)"
+        description: "Comma-separated target archs (manual mode only) | 手动模式下的平台列表"
         required: false
         default: ""
 
 jobs:
   prepare:
-    name: Prepare matrix
+    name: Prepare Matrix
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      matrix: ${{ steps.generate.outputs.matrix }}
+
     steps:
-      - name: Checkout self repo
+      - name: Checkout Self
         uses: actions/checkout@v4
 
-      - name: Read inputs & config.json, compute lists
-        id: build-matrix
+      - name: Generate Matrix
+        id: generate
         run: |
           set -euo pipefail
 
-          # Inputs (strings) from workflow_dispatch
-          MANUAL="${{ github.event.inputs.manual_override || 'false' }}"
-          MANUAL_REPOS="${{ github.event.inputs.manual_repos || '' }}"
-          MANUAL_VERSIONS="${{ github.event.inputs.manual_versions || '' }}"
-          MANUAL_TARGETS="${{ github.event.inputs.manual_targets || '' }}"
+          # ------------------------------
+          # Read workflow inputs
+          # ------------------------------
+          MANUAL="${{ github.event.inputs.manual_override }}"
+          CONFIG_PATH="${{ github.event.inputs.config_path }}"
+          MANUAL_REPOS="${{ github.event.inputs.manual_repos }}"
+          MANUAL_VERS="${{ github.event.inputs.manual_versions }}"
+          MANUAL_TGTS="${{ github.event.inputs.manual_targets }}"
 
-          echo "Manual mode: $MANUAL"
-          # Normalize to lower-case true/false
-          MANUAL_LC=$(echo "$MANUAL" | tr '[:upper:]' '[:lower:]')
+          MANUAL_LC=$(echo "$MANUAL" | tr 'A-Z' 'a-z')
 
-          # load config.json if exists
-          if [ -f config.json ] && [ "$MANUAL_LC" != "true" ]; then
-            echo "Loading config.json"
-            REPOS_JSON=$(jq -r '.repos // []' config.json)
-            VERSIONS_JSON=$(jq -r '.versions // []' config.json)
-            TARGETS_JSON=$(jq -r '.targets // {}' config.json)
-          else
-            REPOS_JSON="[]"
-            VERSIONS_JSON="[]"
-            TARGETS_JSON="{}"
-          fi
-
-          # Helper: convert JSON array to bash list
-          json_to_list() {
-            echo "$1" | jq -r '.[]' 2>/dev/null || echo ""
-          }
-
-          # Determine repos_list
-          if [ "$MANUAL_LC" = "true" ]; then
-            if [ -z "$MANUAL_REPOS" ]; then
-              echo "Error: manual mode enabled but no manual_repos provided" >&2
-              exit 1
-            fi
-            # split by comma, trim spaces
-            IFS=',' read -r -a ARR_REPOS <<< "$MANUAL_REPOS"
-            repos_list=""
-            for r in "${ARR_REPOS[@]}"; do
-              repo_trim=$(echo "$r" | xargs)
-              if [ -n "$repo_trim" ]; then
-                repos_list="$repos_list $repo_trim"
-              fi
-            done
-          else
-            # from config.json
-            repos_list=$(json_to_list "$REPOS_JSON" | xargs)
-          fi
-
-          # Determine versions_list
-          if [ "$MANUAL_LC" = "true" ]; then
-            if [ -z "$MANUAL_VERSIONS" ]; then
-              echo "Error: manual mode enabled but no manual_versions provided" >&2
-              exit 1
-            fi
-            IFS=',' read -r -a ARR_VERS <<< "$MANUAL_VERSIONS"
-            versions_list=""
-            for v in "${ARR_VERS[@]}"; do
-              v_trim=$(echo "$v" | xargs)
-              if [ -n "$v_trim" ]; then
-                versions_list="$versions_list $v_trim"
-              fi
-            done
-          else
-            versions_list=$(json_to_list "$VERSIONS_JSON" | xargs)
-          fi
-
-          # Known targets (complete list - must be present in config.json per your rule)
+          # ------------------------------
+          # Define complete target list
+          # ------------------------------
           ALL_TARGETS=(
             "arm_cortex-a5_vfpv4"
             "arm_cortex-a7_neon-vfpv4"
@@ -125,88 +82,105 @@ jobs:
             "x86_64"
           )
 
-          # Determine targets_list (only selected ones)
+          repos_list=""
+          versions_list=""
           targets_list=""
 
+          # ------------------------------
+          # Manual mode
+          # ------------------------------
           if [ "$MANUAL_LC" = "true" ]; then
-            # manual_targets: comma separated names
-            if [ -z "$MANUAL_TARGETS" ]; then
-              echo "Error: manual mode enabled but no manual_targets provided" >&2
+
+            # --- repos ---
+            IFS=',' read -ra RARR <<< "$MANUAL_REPOS"
+            for r in "${RARR[@]}"; do
+              t=$(echo "$r" | xargs)
+              [ -n "$t" ] && repos_list="$repos_list $t"
+            done
+
+            # --- versions ---
+            IFS=',' read -ra VARR <<< "$MANUAL_VERS"
+            for v in "${VARR[@]}"; do
+              v1=$(echo "$v" | xargs)
+              [ -n "$v1" ] && versions_list="$versions_list $v1"
+            done
+
+            # --- targets ---
+            IFS=',' read -ra TARR <<< "$MANUAL_TGTS"
+            for t in "${TARR[@]}"; do
+              t1=$(echo "$t" | xargs)
+              [ -n "$t1" ] && targets_list="$targets_list $t1"
+            done
+
+          else
+            # ------------------------------
+            # Automatic mode: read config file
+            # ------------------------------
+            if [ ! -f "$CONFIG_PATH" ]; then
+              echo "Config file not found: $CONFIG_PATH"
               exit 1
             fi
-            IFS=',' read -r -a ARR_T <<< "$MANUAL_TARGETS"
-            for t in "${ARR_T[@]}"; do
-              t_trim=$(echo "$t" | xargs)
-              if [ -n "$t_trim" ]; then
-                targets_list="$targets_list $t_trim"
-              fi
-            done
-          else
-            # read targets from config.json (must include all keys; if missing, default false)
+
+            REPOS_JSON=$(jq -r '.repos // []' "$CONFIG_PATH")
+            VERS_JSON=$(jq -r '.versions // []' "$CONFIG_PATH")
+            TGTS_JSON=$(jq -r '.targets // {}' "$CONFIG_PATH")
+
+            repos_list=$(echo "$REPOS_JSON" | jq -r '.[]' | xargs)
+            versions_list=$(echo "$VERS_JSON" | jq -r '.[]' | xargs)
+
             for t in "${ALL_TARGETS[@]}"; do
-              val=$(echo "$TARGETS_JSON" | jq -r --arg T "$t" 'if has($T) then .[$T] else false end')
-              if [ "$val" = "true" ]; then
-                targets_list="$targets_list $t"
-              fi
+              v=$(echo "$TGTS_JSON" | jq -r --arg T "$t" 'if has($T) then .[$T] else false end')
+              [ "$v" = "true" ] && targets_list="$targets_list $t"
             done
           fi
 
-          # Trim leading spaces
-          repos_list=$(echo $repos_list | xargs)
-          versions_list=$(echo $versions_list | xargs)
-          targets_list=$(echo $targets_list | xargs)
+          # ------------------------------
+          # Normalize versions (pure number → openwrt-NNN)
+          # ------------------------------
+          norm_versions=""
+          for v in $versions_list; do
+            if [[ "$v" =~ ^openwrt- ]]; then
+              norm_versions="$norm_versions $v"
+            else
+              norm_versions="$norm_versions openwrt-$v"
+            fi
+          done
+          versions_list=$(echo "$norm_versions" | xargs)
 
-          if [ -z "$repos_list" ]; then
-            echo "Error: empty repos list" >&2
-            exit 1
-          fi
-          if [ -z "$versions_list" ]; then
-            echo "Error: empty versions list" >&2
-            exit 1
-          fi
-          if [ -z "$targets_list" ]; then
-            echo "Error: empty targets list" >&2
-            exit 1
-          fi
+          # ------------------------------
+          # Check
+          # ------------------------------
+          [ -z "$repos_list" ] && { echo "No repos"; exit 1; }
+          [ -z "$versions_list" ] && { echo "No versions"; exit 1; }
+          [ -z "$targets_list" ] && { echo "No targets"; exit 1; }
 
-          echo "Repos: $repos_list"
-          echo "Versions: $versions_list"
-          echo "Targets: $targets_list"
-
-          # Build JSON matrix include array
+          # ------------------------------
+          # Produce matrix.include
+          # ------------------------------
           includes=()
           for repo in $repos_list; do
+            owner=$(echo "$repo" | cut -d'/' -f1)
+            repo_name=$(echo "$repo" | cut -d'/' -f2-)
+            sanitized=$(echo "$repo" | tr '/' '-')
+
             for ver in $versions_list; do
               for arch in $targets_list; do
-                owner=$(echo "$repo" | cut -d'/' -f1)
-                repo_name=$(echo "$repo" | cut -d'/' -f2-)
-                sanitized=$(echo "${repo}" | tr '/' '-')
-                entry=$(jq -n \
-                  --arg r "$repo" \
+                item=$(jq -n \
+                  --arg repo "$repo" \
                   --arg owner "$owner" \
-                  --arg repo_name "$repo_name" \
-                  --arg version "$ver" \
-                  --arg arch "$arch" \
+                  --arg rname "$repo_name" \
                   --arg sanitized "$sanitized" \
-                  '{repo:$r, owner:$owner, repo_name:$repo_name, version:$version, arch:$arch, sanitized:$sanitized}')
-                includes+=("$entry")
+                  --arg ver "$ver" \
+                  --arg arch "$arch" \
+                  '{repo:$repo, owner:$owner, repo_name:$rname, sanitized:$sanitized,
+                    version:$ver, arch:$arch}')
+                includes+=("$item")
               done
             done
           done
 
-          # Compose final matrix JSON
-          matrix_json=$(jq -n --argjson arr "$(printf '%s\n' "${includes[@]}" | jq -s '.')" '{include:$arr}')
-          echo "Matrix JSON length: $(echo "$matrix_json" | jq '.include | length')"
-          # expose output
-          echo "matrix<<EOF" >> $GITHUB_OUTPUT
-          echo "$matrix_json" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: set-matrix (noop step to expose output)
-        id: set-matrix
-        run: |
-          echo "matrix=${{ steps.build-matrix.outputs.matrix }}" >> $GITHUB_OUTPUT
-
+          matrix=$(printf '%s\n' "${includes[@]}" | jq -s '{include: .}')
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
   release:
     name: Release (build)
     needs: prepare
@@ -224,24 +198,27 @@ jobs:
           repository: ${{ matrix.repo }}
           path: plugin_repo
 
-      - name: gather repo info (commit/branch/description/release)
+      - name: Gather repo info (commit/branch/description/release)
         id: repo_info
         run: |
           set -euo pipefail
-          cd plugin_repo
-          COMMIT=$(git rev-parse --short HEAD || echo "")
+          cd plugin_repo || exit 1
+
+          # commit & branch
+          COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "")
           BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+
           echo "commit=$COMMIT" >> $GITHUB_OUTPUT
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
 
-          # Try to fetch repo description and latest release from GitHub API using GITHUB_TOKEN
+          # Query GitHub API for description / latest release if token available
           OWNER="${{ matrix.owner }}"
           REPO_NAME="${{ matrix.repo_name }}"
           API="https://api.github.com/repos/${OWNER}/${REPO_NAME}"
-          TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          TOKEN="${{ secrets.GITHUB_TOKEN || '' }}"
 
           if [ -n "$TOKEN" ]; then
-            DESC=$(curl -s -H "Authorization: token $TOKEN" "$API" | jq -r '.description // ""')
+            DESC=$(curl -s -H "Authorization: token $TOKEN" "$API" | jq -r '.description // ""' 2>/dev/null || echo "")
             LATEST=$(curl -s -H "Authorization: token $TOKEN" "$API/releases/latest" | jq -r '.tag_name // ""' 2>/dev/null || echo "")
           else
             DESC=$(curl -s "$API" | jq -r '.description // ""' 2>/dev/null || echo "")
@@ -251,127 +228,126 @@ jobs:
           echo "repo_description=$DESC" >> $GITHUB_OUTPUT
           echo "latest_release=$LATEST" >> $GITHUB_OUTPUT
 
-      - name: detect packages (recursive) and dependencies
+      - name: Detect packages (recursive) and dependencies
         id: detect_pkgs
         run: |
           set -euo pipefail
-          cd plugin_repo
+          cd plugin_repo || exit 1
 
-          # find all Makefile
           MAKEFILES=$(find . -type f -name Makefile 2>/dev/null || true)
           PKGS=""
           DEP_LIST=""
 
           for mk in $MAKEFILES; do
-            # get PKG_NAME (allow spaces)
-            pkg=$(grep -E '^PKG_NAME *:?=' "$mk" 2>/dev/null | head -n1 | awk -F'=' '{print $2}' | tr -d ' ' || true)
+            # extract PKG_NAME (both ':=' and '=' forms), tolerate spaces
+            pkg=$(grep -E '^\s*PKG_NAME\s*(:|:)?=' "$mk" 2>/dev/null | head -n1 | sed 's/.*=[[:space:]]*//' | tr -d ' ' || true)
             if [ -n "$pkg" ]; then
               PKGS="$PKGS $pkg"
             fi
 
-            # get DEPENDS (may be multiple lines)
-            deps=$(grep -E '^DEPENDS *:?=' "$mk" 2>/dev/null | awk -F'=' '{print $2}' || true)
+            # extract DEPENDS (may include +, |, ( ), etc.)
+            deps=$(grep -E '^\s*DEPENDS\s*(:|:)?=' "$mk" 2>/dev/null | sed 's/.*=[[:space:]]*//' || true)
             if [ -n "$deps" ]; then
-              # split tokens, remove leading + and other modifiers
               for token in $deps; do
-                clean=$(echo "$token" | sed 's/^[+]*//g' | sed 's/[()|&]//g' | tr -d '\\n' | tr -d '\r' | xargs)
-                if [ -n "$clean" ]; then
-                  DEP_LIST="$DEP_LIST $clean"
-                fi
+                clean=$(echo "$token" | sed 's/^[+]*//g' | sed 's/[()|&]//g' | tr -d '\r' | xargs)
+                [ -n "$clean" ] && DEP_LIST="$DEP_LIST $clean"
               done
             fi
           done
 
-          # unique lists
-          PKGS=$(echo $PKGS | xargs -n1 | sort -u | xargs || true)
-          DEP_LIST=$(echo $DEP_LIST | xargs -n1 | sort -u | xargs || true)
-
-          if [ -z "$PKGS" ]; then
-            echo "No PKG_NAME found in repo; trying fallback: look for package name from package/ directories"
-            # fallback: try directory names under package/
+          # fallback: directory names under package/ if no PKG_NAME found
+          if [ -z "$(echo $PKGS | xargs)" ]; then
             fallback=""
             for d in package/* package/*/* 2>/dev/null; do
               if [ -f "$d/Makefile" ]; then
-                name=$(grep -E '^PKG_NAME *:?=' "$d/Makefile" 2>/dev/null | head -n1 | awk -F'=' '{print $2}' | tr -d ' ' || true)
-                if [ -n "$name" ]; then
-                  fallback="$fallback $name"
-                fi
+                name=$(grep -E '^\s*PKG_NAME\s*(:|:)?=' "$d/Makefile" 2>/dev/null | head -n1 | sed 's/.*=[[:space:]]*//' | tr -d ' ' || true)
+                [ -n "$name" ] && fallback="$fallback $name"
               fi
             done
-            fallback=$(echo $fallback | xargs -n1 | sort -u | xargs || true)
             PKGS="$fallback"
           fi
 
+          PKGS=$(echo $PKGS | xargs -n1 | sort -u | xargs || true)
+          DEP_LIST=$(echo $DEP_LIST | xargs -n1 | sort -u | xargs || true)
+
+          # export outputs
           echo "found_pkgs=$PKGS" >> $GITHUB_OUTPUT
           echo "found_deps=$DEP_LIST" >> $GITHUB_OUTPUT
 
-      - name: build with OpenWrt SDK (only plugin packages)
-        env:
-          OPENWRT_VERSION: ${{ matrix.version }}
-          SDK_ARCH: ${{ matrix.arch }}-${{ matrix.version }}
-          FEEDNAME: custom
-          KEY_BUILD: ${{ secrets.KEY_BUILD }}
-          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
-          NO_REFRESH_CHECK: true
-        uses: openwrt/gh-action-sdk@main
-        with:
-          # pass PACKAGES as space-separated PKG_NAME list discovered above
-          # the action reads env.PACKAGES - to be safe we export PACKAGES via run before using the action
-          # but actions inputs vary; using env works
-          # We set PACKAGES below via environment injection (the action will use it)
-          # See subsequent step: action will pick up env.PACKAGES
-        env:
-          PACKAGES: ${{ steps.detect_pkgs.outputs.found_pkgs }}
-          ARCH: ${{ matrix.arch }}-${{ matrix.version }}
-          INDEX: 1
+          if [ -z "$PKGS" ]; then
+            echo "Warning: No PKG_NAME discovered. Build step may fail if no PACKAGES set."
+          else
+            echo "Discovered packages: $PKGS"
+          fi
 
-      - name: collect ipk + build metadata and package outputs
+      - name: Build with OpenWrt SDK (only plugin packages)
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.version }}
+          PACKAGES: ${{ steps.detect_pkgs.outputs.found_pkgs }}
+          FEEDNAME: custom
+          INDEX: 1
+          KEY_BUILD: ${{ secrets.KEY_BUILD || '' }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY || '' }}
+          NO_REFRESH_CHECK: "true"
+
+      - name: Collect ipk files & build metadata
         run: |
           set -euo pipefail
           mkdir -p output/${{ matrix.arch }}/result
-          # Copy ipk files from expected SDK output location(s)
-          # The action typically writes to bin/packages/<arch>/{custom,base,...}
-          # We'll find all .ipk under bin/packages and copy them
-          find bin/packages -type f -name '*.ipk' -print0 2>/dev/null | xargs -0 -I{} cp -v {} output/${{ matrix.arch }}/ || true
+
+          # copy ipk files only related to the discovered packages if possible
+          # Find ipks under bin/packages and copy them; try to filter by package names
+          PKGS="${{ steps.detect_pkgs.outputs.found_pkgs }}"
+          if [ -n "$PKGS" ]; then
+            for p in $PKGS; do
+              # find ipk filenames containing package name
+              find bin/packages -type f -name "*${p}*.ipk" -exec cp -v {} output/${{ matrix.arch }}/ \; 2>/dev/null || true
+            done
+          fi
+
+          # As fallback copy any ipk under arch folder
+          if [ -z "$(ls -A output/${{ matrix.arch }} 2>/dev/null | grep -E '\.ipk' || true)" ]; then
+            find bin/packages -type f -name '*.ipk' -exec cp -v {} output/${{ matrix.arch }}/ \; 2>/dev/null || true
+          fi
 
           # Write result/info.txt
-          mkdir -p output/${{ matrix.arch }}/result
-          INFOFILE=output/${{ matrix.arch }}/result/info.txt
-          echo "plugin_repo: ${{ matrix.repo }}" > "$INFOFILE"
-          echo "repo_owner: ${{ matrix.owner }}" >> "$INFOFILE"
-          echo "repo_name: ${{ matrix.repo_name }}" >> "$INFOFILE"
-          echo "openwrt_version: ${{ matrix.version }}" >> "$INFOFILE"
-          echo "arch: ${{ matrix.arch }}" >> "$INFOFILE"
-          echo "packages: ${{ steps.detect_pkgs.outputs.found_pkgs }}" >> "$INFOFILE"
-          echo "dependencies: ${{ steps.detect_pkgs.outputs.found_deps }}" >> "$INFOFILE"
-          echo "commit: ${{ steps.repo_info.outputs.commit }}" >> "$INFOFILE"
-          echo "branch: ${{ steps.repo_info.outputs.branch }}" >> "$INFOFILE"
-          echo "repo_description: ${{ steps.repo_info.outputs.repo_description }}" >> "$INFOFILE"
-          echo "latest_release: ${{ steps.repo_info.outputs.latest_release }}" >> "$INFOFILE"
-          echo "build_time: $(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$INFOFILE"
+          INFO=output/${{ matrix.arch }}/result/info.txt
+          echo "plugin_repo: ${{ matrix.repo }}" > "$INFO"
+          echo "repo_owner: ${{ matrix.owner }}" >> "$INFO"
+          echo "repo_name: ${{ matrix.repo_name }}" >> "$INFO"
+          echo "openwrt_version: ${{ matrix.version }}" >> "$INFO"
+          echo "arch: ${{ matrix.arch }}" >> "$INFO"
+          echo "packages: ${{ steps.detect_pkgs.outputs.found_pkgs }}" >> "$INFO"
+          echo "dependencies: ${{ steps.detect_pkgs.outputs.found_deps }}" >> "$INFO"
+          echo "commit: ${{ steps.repo_info.outputs.commit }}" >> "$INFO"
+          echo "branch: ${{ steps.repo_info.outputs.branch }}" >> "$INFO"
+          echo "repo_description: ${{ steps.repo_info.outputs.repo_description }}" >> "$INFO"
+          echo "latest_release: ${{ steps.repo_info.outputs.latest_release }}" >> "$INFO"
+          echo "build_time: $(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$INFO"
 
-          # Append short changelog
-          CHANGELOG=output/${{ matrix.arch }}/changelog.txt
-          echo "==== Build: ${{ matrix.repo }} | ${{ matrix.version }} | ${{ matrix.arch }} ====" >> "$CHANGELOG"
-          echo "Time: $(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$CHANGELOG"
-          echo "Commit: ${{ steps.repo_info.outputs.commit }}" >> "$CHANGELOG"
-          echo "Branch: ${{ steps.repo_info.outputs.branch }}" >> "$CHANGELOG"
-          echo "Packages built: ${{ steps.detect_pkgs.outputs.found_pkgs }}" >> "$CHANGELOG"
-          echo "Dependencies (declared): ${{ steps.detect_pkgs.outputs.found_deps }}" >> "$CHANGELOG"
-          echo "" >> "$CHANGELOG"
+          # Append to changelog.txt (per-arch)
+          CHANGE=output/${{ matrix.arch }}/changelog.txt
+          echo "==== Build: ${{ matrix.repo }} | ${{ matrix.version }} | ${{ matrix.arch }} ====" >> "$CHANGE"
+          echo "Time: $(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$CHANGE"
+          echo "Commit: ${{ steps.repo_info.outputs.commit }}" >> "$CHANGE"
+          echo "Branch: ${{ steps.repo_info.outputs.branch }}" >> "$CHANGE"
+          echo "Packages built: ${{ steps.detect_pkgs.outputs.found_pkgs }}" >> "$CHANGE"
+          echo "Dependencies (declared): ${{ steps.detect_pkgs.outputs.found_deps }}" >> "$CHANGE"
+          echo "" >> "$CHANGE"
 
-      - name: package artifact zip
+      - name: Package artifact zip
         run: |
           set -euo pipefail
           OUTDIR=output/${{ matrix.arch }}
-          # create a zip that contains the ipks and result/info.txt and changelog.txt
-          ZIPNAME="${{ matrix.sanitized }}-${{ matrix.arch }}-${{ matrix.version }}.zip"
+          SAN=${{ matrix.sanitized }}
+          ZIPNAME="${SAN}-${{ matrix.arch }}-${{ matrix.version }}.zip"
           pushd "$OUTDIR" >/dev/null || exit 1
           zip -r "../${ZIPNAME}" . || true
           popd >/dev/null
-          echo "artifact_path=output/${{ matrix.sanitized }}-${{ matrix.arch }}-${{ matrix.version }}.zip" >> $GITHUB_OUTPUT
+          echo "zip_path=output/${ZIPNAME}" >> $GITHUB_OUTPUT
 
-      - name: upload artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.sanitized }}-${{ matrix.arch }}-${{ matrix.version }}
