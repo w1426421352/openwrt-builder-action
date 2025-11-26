@@ -1,0 +1,33 @@
+{
+  "repos": [
+    "nikkinikki-org/OpenWrt-nikki",
+    "honwen/luci-app-aliddns"
+  ],
+  "versions": [
+    "openwrt-24.10",
+    "openwrt-23.05"
+  ],
+  "targets": {
+    "arm_cortex-a5_vfpv4": true,
+    "arm_cortex-a7_neon-vfpv4": true,
+    "arm_cortex-a8_vfpv3": true,
+    "arm_cortex-a9": true,
+    "arm_cortex-a9_vfpv3-d16": true,
+    "arm_cortex-a9_neon": true,
+    "arm_cortex-a15_neon-vfpv4": true,
+    "aarch64_cortex-a53": true,
+    "aarch64_cortex-a72": true,
+    "aarch64_cortex-a76": true,
+    "aarch64_generic": true,
+    "mips_24kc": true,
+    "mips_4kec": true,
+    "mips_mips32": true,
+    "mipsel_24kc": true,
+    "mipsel_24kc_24kf": true,
+    "mipsel_74kc": true,
+    "mipsel_mips32": true,
+    "mips64_octeonplus": true,
+    "i386_pentium4": true,
+    "x86_64": true
+  }
+}
