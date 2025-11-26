@@ -1,0 +1,111 @@
+name: release-packages II
+
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - arm_cortex-a5_vfpv4
+          - arm_cortex-a7_neon-vfpv4
+          - arm_cortex-a8_vfpv3
+          - arm_cortex-a9
+          - arm_cortex-a9_vfpv3-d16
+          - arm_cortex-a9_neon
+          - arm_cortex-a15_neon-vfpv4
+          - aarch64_cortex-a53
+          - aarch64_cortex-a72
+          - aarch64_cortex-a76
+          - aarch64_generic
+          - mips_24kc
+          - mips_4kec
+          - mips_mips32
+          - mipsel_24kc
+          - mipsel_24kc_24kf
+          - mipsel_74kc
+          - mipsel_mips32
+          - mips64_octeonplus
+          - i386_pentium4
+          - x86_64
+
+    steps:
+      - name: checkout self repo
+        uses: actions/checkout@v4
+
+      - name: load config.json
+        run: |
+          echo "OPENWRT_VERSION=$(jq -r '.openwrt_version' config.json)" >> $GITHUB_ENV
+          RAW_REPO=$(jq -r '.plugin_repo' config.json)
+
+          # 自动解析仓库 URL => owner/repo
+          if [[ "$RAW_REPO" == http* ]] || [[ "$RAW_REPO" == git@* ]]; then
+            REPO_NAME=$(basename -s .git "$RAW_REPO")
+            REPO_OWNER=$(echo "$RAW_REPO" | awk -F'/' '{print $(NF-1)}')
+            PLUGIN_REPO="$REPO_OWNER/$REPO_NAME"
+          else
+            PLUGIN_REPO="$RAW_REPO"
+          fi
+
+          # artifact 名称不可包含 '/'
+          SANITIZED_REPO=$(echo "$PLUGIN_REPO" | tr '/' '-')
+
+          echo "PLUGIN_REPO=$PLUGIN_REPO" >> $GITHUB_ENV
+          echo "SANITIZED_REPO=$SANITIZED_REPO" >> $GITHUB_ENV
+
+      - name: checkout plugin repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PLUGIN_REPO }}
+          path: plugin_repo
+
+      - name: detect packages from Makefiles (recursive)
+        run: |
+          cd plugin_repo
+
+          MAKEFILES=$(find . -name Makefile)
+
+          PKGS=""
+          for mk in $MAKEFILES; do
+            NAME=$(grep -E '^PKG_NAME *:=' "$mk" | awk -F':=' '{print $2}' | tr -d ' ')
+            if [[ -n "$NAME" ]]; then
+              PKGS="$PKGS $NAME"
+            fi
+          done
+
+          PKGS=$(echo $PKGS | xargs -n1 | sort -u | xargs)
+
+          if [[ -z "$PKGS" ]]; then
+            echo "❌ ERROR: 找不到任何 PKG_NAME，请检查 Makefile"
+            exit 1
+          fi
+
+          echo "检测到的包名: $PKGS"
+          echo "PACKAGES=$PKGS" >> $GITHUB_ENV
+
+      - name: build with OpenWrt SDK
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}-${{ env.OPENWRT_VERSION }}
+          FEEDNAME: custom
+          PACKAGES: ${{ env.PACKAGES }}
+          INDEX: 1
+          KEY_BUILD: ${{ secrets.KEY_BUILD }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          NO_REFRESH_CHECK: true
+
+      - name: collect ipk files
+        run: |
+          mkdir -p output/${{ matrix.arch }}
+          find bin/packages/${{ matrix.arch }}/ -name '*.ipk' -exec cp {} output/${{ matrix.arch }}/ \;
+
+      - name: upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.SANITIZED_REPO }}-${{ matrix.arch }}-${{ env.OPENWRT_VERSION }}
+          path: output/${{ matrix.arch }}/
