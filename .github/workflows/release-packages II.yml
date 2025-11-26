@@ -5,38 +5,38 @@ on:
     inputs:
       manual_override:
         description: "Enable manual mode? (true/false) | 是否启用手动模式"
-        required: false
+        required: true
+        type: choice
+        options:
+          - "false"
+          - "true"
         default: "false"
 
       config_path:
-        description: "Path to config file (ignored if manual mode), default: config.json | 配置文件路径"
+        description: "Path to config file (only used when manual mode = false)"
         required: false
         default: "config.json"
 
       manual_repos:
-        description: "Comma-separated owner/repo list (manual mode only) | 手动模式下的仓库列表（逗号分隔）"
+        description: "Manual mode only: comma-separated owner/repo list"
         required: false
         default: ""
 
       manual_versions:
-        description: "Comma-separated OpenWrt versions (e.g. 24.10,23.05) | 手动模式下版本列表"
+        description: "Manual mode only: comma-separated versions like 24.10,23.05"
         required: false
         default: ""
 
-      manual_targets:
-        description: "Comma-separated target archs (manual mode only) | 手动模式下的平台列表"
-        required: false
-        default: ""
 
 jobs:
   prepare:
     name: Prepare Matrix
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.generate.outputs.matrix }}
+      matrix_b64: ${{ steps.generate.outputs.matrix_b64 }}
 
     steps:
-      - name: Checkout Self
+      - name: Checkout self
         uses: actions/checkout@v4
 
       - name: Generate Matrix
@@ -44,20 +44,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          # ------------------------------
-          # Read workflow inputs
-          # ------------------------------
           MANUAL="${{ github.event.inputs.manual_override }}"
-          CONFIG_PATH="${{ github.event.inputs.config_path }}"
           MANUAL_REPOS="${{ github.event.inputs.manual_repos }}"
           MANUAL_VERS="${{ github.event.inputs.manual_versions }}"
-          MANUAL_TGTS="${{ github.event.inputs.manual_targets }}"
+          CONFIG_PATH="${{ github.event.inputs.config_path }}"
 
           MANUAL_LC=$(echo "$MANUAL" | tr 'A-Z' 'a-z')
 
-          # ------------------------------
-          # Define complete target list
-          # ------------------------------
           ALL_TARGETS=(
             "arm_cortex-a5_vfpv4"
             "arm_cortex-a7_neon-vfpv4"
@@ -86,57 +79,63 @@ jobs:
           versions_list=""
           targets_list=""
 
-          # ------------------------------
-          # Manual mode
-          # ------------------------------
           if [ "$MANUAL_LC" = "true" ]; then
-
-            # --- repos ---
+            # ----------------------------
+            # Manual mode: repos & versions only
+            # ----------------------------
             IFS=',' read -ra RARR <<< "$MANUAL_REPOS"
             for r in "${RARR[@]}"; do
-              t=$(echo "$r" | xargs)
-              [ -n "$t" ] && repos_list="$repos_list $t"
+              x=$(echo "$r" | xargs)
+              [ -n "$x" ] && repos_list="$repos_list $x"
             done
 
-            # --- versions ---
             IFS=',' read -ra VARR <<< "$MANUAL_VERS"
             for v in "${VARR[@]}"; do
-              v1=$(echo "$v" | xargs)
-              [ -n "$v1" ] && versions_list="$versions_list $v1"
+              x=$(echo "$v" | xargs)
+              [ -n "$x" ] && versions_list="$versions_list $x"
             done
 
-            # --- targets ---
-            IFS=',' read -ra TARR <<< "$MANUAL_TGTS"
-            for t in "${TARR[@]}"; do
-              t1=$(echo "$t" | xargs)
-              [ -n "$t1" ] && targets_list="$targets_list $t1"
+            # Manual mode uses ALL platforms by your request
+            for t in "${ALL_TARGETS[@]}"; do
+              targets_list="$targets_list $t"
             done
 
           else
-            # ------------------------------
-            # Automatic mode: read config file
-            # ------------------------------
+            # ----------------------------
+            # Automatic mode: read config.json
+            # ----------------------------
+
             if [ ! -f "$CONFIG_PATH" ]; then
-              echo "Config file not found: $CONFIG_PATH"
+              echo "❌ Config file '$CONFIG_PATH' not found"
               exit 1
             fi
 
-            REPOS_JSON=$(jq -r '.repos // []' "$CONFIG_PATH")
-            VERS_JSON=$(jq -r '.versions // []' "$CONFIG_PATH")
-            TGTS_JSON=$(jq -r '.targets // {}' "$CONFIG_PATH")
+            # repos
+            repos_list=$(jq -r '.repos[] // empty' "$CONFIG_PATH" | xargs)
 
-            repos_list=$(echo "$REPOS_JSON" | jq -r '.[]' | xargs)
-            versions_list=$(echo "$VERS_JSON" | jq -r '.[]' | xargs)
+            # versions
+            versions_list=$(jq -r '.versions[] // empty' "$CONFIG_PATH" | xargs)
 
+            # targets
+            targets_json=$(jq -r '.targets' "$CONFIG_PATH")
             for t in "${ALL_TARGETS[@]}"; do
-              v=$(echo "$TGTS_JSON" | jq -r --arg T "$t" 'if has($T) then .[$T] else false end')
-              [ "$v" = "true" ] && targets_list="$targets_list $t"
+              v=$(echo "$targets_json" | jq -r --arg T "$t" 'if has($T) then .[$T] else false end')
+              if [ "$v" = "true" ]; then
+                targets_list="$targets_list $t"
+              fi
             done
           fi
 
-          # ------------------------------
-          # Normalize versions (pure number → openwrt-NNN)
-          # ------------------------------
+          # ----------------------------
+          # Validation
+          # ----------------------------
+          [ -z "$repos_list" ] && { echo "❌ No repos"; exit 1; }
+          [ -z "$versions_list" ] && { echo "❌ No versions"; exit 1; }
+          [ -z "$targets_list" ] && { echo "❌ No targets"; exit 1; }
+
+          # ----------------------------
+          # Normalize versions
+          # ----------------------------
           norm_versions=""
           for v in $versions_list; do
             if [[ "$v" =~ ^openwrt- ]]; then
@@ -147,20 +146,14 @@ jobs:
           done
           versions_list=$(echo "$norm_versions" | xargs)
 
-          # ------------------------------
-          # Check
-          # ------------------------------
-          [ -z "$repos_list" ] && { echo "No repos"; exit 1; }
-          [ -z "$versions_list" ] && { echo "No versions"; exit 1; }
-          [ -z "$targets_list" ] && { echo "No targets"; exit 1; }
-
-          # ------------------------------
-          # Produce matrix.include
-          # ------------------------------
+          # ----------------------------
+          # Build final matrix
+          # ----------------------------
           includes=()
+
           for repo in $repos_list; do
             owner=$(echo "$repo" | cut -d'/' -f1)
-            repo_name=$(echo "$repo" | cut -d'/' -f2-)
+            name=$(echo "$repo" | cut -d'/' -f2-)
             sanitized=$(echo "$repo" | tr '/' '-')
 
             for ver in $versions_list; do
@@ -168,28 +161,30 @@ jobs:
                 item=$(jq -n \
                   --arg repo "$repo" \
                   --arg owner "$owner" \
-                  --arg rname "$repo_name" \
+                  --arg name "$name" \
                   --arg sanitized "$sanitized" \
                   --arg ver "$ver" \
                   --arg arch "$arch" \
-                  '{repo:$repo, owner:$owner, repo_name:$rname, sanitized:$sanitized,
-                    version:$ver, arch:$arch}')
+                  '{repo:$repo, owner:$owner, repo_name:$name, sanitized:$sanitized, version:$ver, arch:$arch}')
                 includes+=("$item")
               done
             done
           done
 
-          matrix=$(printf '%s\n' "${includes[@]}" | jq -s '{include: .}')
-          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          matrix=$(printf '%s\n' "${includes[@]}" | jq -s '{include:.}')
+          matrix_b64=$(echo "$matrix" | base64 -w0)
+
+          echo "matrix_b64=$matrix_b64" >> $GITHUB_OUTPUT
   release:
-    name: Release (build)
+    name: Build Packages
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      matrix: ${{ fromJson( fromBase64( needs.prepare.outputs.matrix_b64 ) ) }}
+
     steps:
-      - name: Checkout self repo
+      - name: Checkout self
         uses: actions/checkout@v4
 
       - name: Checkout plugin repo
@@ -198,157 +193,64 @@ jobs:
           repository: ${{ matrix.repo }}
           path: plugin_repo
 
-      - name: Gather repo info (commit/branch/description/release)
+      - name: Extract repo metadata
         id: repo_info
         run: |
           set -euo pipefail
-          cd plugin_repo || exit 1
+          cd plugin_repo
 
-          # commit & branch
-          COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "")
-          BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+          COMMIT=$(git rev-parse --short HEAD || true)
+          BRANCH=$(git rev-parse --abbrev-ref HEAD || true)
 
           echo "commit=$COMMIT" >> $GITHUB_OUTPUT
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
 
-          # Query GitHub API for description / latest release if token available
-          OWNER="${{ matrix.owner }}"
-          REPO_NAME="${{ matrix.repo_name }}"
-          API="https://api.github.com/repos/${OWNER}/${REPO_NAME}"
-          TOKEN="${{ secrets.GITHUB_TOKEN || '' }}"
-
-          if [ -n "$TOKEN" ]; then
-            DESC=$(curl -s -H "Authorization: token $TOKEN" "$API" | jq -r '.description // ""' 2>/dev/null || echo "")
-            LATEST=$(curl -s -H "Authorization: token $TOKEN" "$API/releases/latest" | jq -r '.tag_name // ""' 2>/dev/null || echo "")
-          else
-            DESC=$(curl -s "$API" | jq -r '.description // ""' 2>/dev/null || echo "")
-            LATEST=$(curl -s "$API/releases/latest" | jq -r '.tag_name // ""' 2>/dev/null || echo "")
-          fi
-
-          echo "repo_description=$DESC" >> $GITHUB_OUTPUT
-          echo "latest_release=$LATEST" >> $GITHUB_OUTPUT
-
-      - name: Detect packages (recursive) and dependencies
+      - name: Detect packages
         id: detect_pkgs
         run: |
           set -euo pipefail
-          cd plugin_repo || exit 1
+          cd plugin_repo
 
-          MAKEFILES=$(find . -type f -name Makefile 2>/dev/null || true)
+          MAKEFILES=$(find . -type f -name Makefile)
           PKGS=""
-          DEP_LIST=""
-
           for mk in $MAKEFILES; do
-            # extract PKG_NAME (both ':=' and '=' forms), tolerate spaces
-            pkg=$(grep -E '^\s*PKG_NAME\s*(:|:)?=' "$mk" 2>/dev/null | head -n1 | sed 's/.*=[[:space:]]*//' | tr -d ' ' || true)
-            if [ -n "$pkg" ]; then
-              PKGS="$PKGS $pkg"
-            fi
-
-            # extract DEPENDS (may include +, |, ( ), etc.)
-            deps=$(grep -E '^\s*DEPENDS\s*(:|:)?=' "$mk" 2>/dev/null | sed 's/.*=[[:space:]]*//' || true)
-            if [ -n "$deps" ]; then
-              for token in $deps; do
-                clean=$(echo "$token" | sed 's/^[+]*//g' | sed 's/[()|&]//g' | tr -d '\r' | xargs)
-                [ -n "$clean" ] && DEP_LIST="$DEP_LIST $clean"
-              done
-            fi
+            p=$(grep -E '^\s*PKG_NAME\s*(:|:)?=' "$mk" | head -n1 | sed 's/.*=[[:space:]]*//' | tr -d ' ')
+            [ -n "$p" ] && PKGS="$PKGS $p"
           done
-
-          # fallback: directory names under package/ if no PKG_NAME found
-          if [ -z "$(echo $PKGS | xargs)" ]; then
-            fallback=""
-            for d in package/* package/*/* 2>/dev/null; do
-              if [ -f "$d/Makefile" ]; then
-                name=$(grep -E '^\s*PKG_NAME\s*(:|:)?=' "$d/Makefile" 2>/dev/null | head -n1 | sed 's/.*=[[:space:]]*//' | tr -d ' ' || true)
-                [ -n "$name" ] && fallback="$fallback $name"
-              fi
-            done
-            PKGS="$fallback"
-          fi
-
           PKGS=$(echo $PKGS | xargs -n1 | sort -u | xargs || true)
-          DEP_LIST=$(echo $DEP_LIST | xargs -n1 | sort -u | xargs || true)
-
-          # export outputs
           echo "found_pkgs=$PKGS" >> $GITHUB_OUTPUT
-          echo "found_deps=$DEP_LIST" >> $GITHUB_OUTPUT
 
-          if [ -z "$PKGS" ]; then
-            echo "Warning: No PKG_NAME discovered. Build step may fail if no PACKAGES set."
-          else
-            echo "Discovered packages: $PKGS"
-          fi
-
-      - name: Build with OpenWrt SDK (only plugin packages)
+      - name: Build plugin packages
         uses: openwrt/gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.version }}
           PACKAGES: ${{ steps.detect_pkgs.outputs.found_pkgs }}
-          FEEDNAME: custom
           INDEX: 1
-          KEY_BUILD: ${{ secrets.KEY_BUILD || '' }}
-          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY || '' }}
-          NO_REFRESH_CHECK: "true"
 
-      - name: Collect ipk files & build metadata
+      - name: Collect output
         run: |
           set -euo pipefail
-          mkdir -p output/${{ matrix.arch }}/result
+          ARCH="${{ matrix.arch }}"
+          OUT="output/$ARCH"
+          mkdir -p "$OUT"
 
-          # copy ipk files only related to the discovered packages if possible
-          # Find ipks under bin/packages and copy them; try to filter by package names
-          PKGS="${{ steps.detect_pkgs.outputs.found_pkgs }}"
-          if [ -n "$PKGS" ]; then
-            for p in $PKGS; do
-              # find ipk filenames containing package name
-              find bin/packages -type f -name "*${p}*.ipk" -exec cp -v {} output/${{ matrix.arch }}/ \; 2>/dev/null || true
-            done
-          fi
+          find bin/packages -name '*.ipk' -exec cp {} "$OUT" \; || true
 
-          # As fallback copy any ipk under arch folder
-          if [ -z "$(ls -A output/${{ matrix.arch }} 2>/dev/null | grep -E '\.ipk' || true)" ]; then
-            find bin/packages -type f -name '*.ipk' -exec cp -v {} output/${{ matrix.arch }}/ \; 2>/dev/null || true
-          fi
-
-          # Write result/info.txt
-          INFO=output/${{ matrix.arch }}/result/info.txt
-          echo "plugin_repo: ${{ matrix.repo }}" > "$INFO"
-          echo "repo_owner: ${{ matrix.owner }}" >> "$INFO"
-          echo "repo_name: ${{ matrix.repo_name }}" >> "$INFO"
-          echo "openwrt_version: ${{ matrix.version }}" >> "$INFO"
+          INFO="$OUT/result-info.txt"
+          echo "repo: ${{ matrix.repo }}" > "$INFO"
+          echo "version: ${{ matrix.version }}" >> "$INFO"
           echo "arch: ${{ matrix.arch }}" >> "$INFO"
           echo "packages: ${{ steps.detect_pkgs.outputs.found_pkgs }}" >> "$INFO"
-          echo "dependencies: ${{ steps.detect_pkgs.outputs.found_deps }}" >> "$INFO"
           echo "commit: ${{ steps.repo_info.outputs.commit }}" >> "$INFO"
           echo "branch: ${{ steps.repo_info.outputs.branch }}" >> "$INFO"
-          echo "repo_description: ${{ steps.repo_info.outputs.repo_description }}" >> "$INFO"
-          echo "latest_release: ${{ steps.repo_info.outputs.latest_release }}" >> "$INFO"
-          echo "build_time: $(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$INFO"
 
-          # Append to changelog.txt (per-arch)
-          CHANGE=output/${{ matrix.arch }}/changelog.txt
-          echo "==== Build: ${{ matrix.repo }} | ${{ matrix.version }} | ${{ matrix.arch }} ====" >> "$CHANGE"
-          echo "Time: $(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$CHANGE"
-          echo "Commit: ${{ steps.repo_info.outputs.commit }}" >> "$CHANGE"
-          echo "Branch: ${{ steps.repo_info.outputs.branch }}" >> "$CHANGE"
-          echo "Packages built: ${{ steps.detect_pkgs.outputs.found_pkgs }}" >> "$CHANGE"
-          echo "Dependencies (declared): ${{ steps.detect_pkgs.outputs.found_deps }}" >> "$CHANGE"
-          echo "" >> "$CHANGE"
+          ZIP="package-${{ matrix.sanitized }}-${{ matrix.arch }}-${{ matrix.version }}.zip"
+          (cd output && zip -r "$ZIP" "$ARCH")
 
-      - name: Package artifact zip
-        run: |
-          set -euo pipefail
-          OUTDIR=output/${{ matrix.arch }}
-          SAN=${{ matrix.sanitized }}
-          ZIPNAME="${SAN}-${{ matrix.arch }}-${{ matrix.version }}.zip"
-          pushd "$OUTDIR" >/dev/null || exit 1
-          zip -r "../${ZIPNAME}" . || true
-          popd >/dev/null
-          echo "zip_path=output/${ZIPNAME}" >> $GITHUB_OUTPUT
+          echo "zip_path=output/$ZIP" >> $GITHUB_OUTPUT
 
-      - name: Upload artifact
+      - name: Upload zip artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.sanitized }}-${{ matrix.arch }}-${{ matrix.version }}
-          path: output/${{ matrix.sanitized }}-${{ matrix.arch }}-${{ matrix.version }}.zip
+          path: ${{ steps.collect_output.outputs.zip_path }}
