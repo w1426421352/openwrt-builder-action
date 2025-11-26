@@ -1,4 +1,4 @@
 {
   "openwrt_version": "openwrt-24.10",
-  "plugin_repo": "honwen/luci-app-aliddns"
+  "plugin_repo": "lwb1978/openwrt-gecoosac"
 }
