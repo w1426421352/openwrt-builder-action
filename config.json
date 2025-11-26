@@ -1,7 +1,7 @@
 {
   "repos": [
     "nikkinikki-org/OpenWrt-nikki",
-    "honwen/luci-app-aliddns"
+    "openwrt-gecoosac"
   ],
   "versions": [
     "openwrt-24.10",
