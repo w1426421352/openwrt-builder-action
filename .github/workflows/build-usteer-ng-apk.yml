@@ -1,0 +1,120 @@
+name: Build usteer-ng All Targets (APK & Patched)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}/${{ matrix.subtarget }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # --- 热门架构 (涵盖绝大多数设备) ---
+          - target: x86
+            subtarget: 64
+          - target: mediatek
+            subtarget: filogic  # 红米 AX6000, 360T7 等
+          - target: ramips
+            subtarget: mt7621   # 红米 AC2100, 斐讯 K2P 等
+          - target: rockchip
+            subtarget: armv8    # NanoPi R2S/R4S/R5S 等
+          - target: armsr
+            subtarget: armv8    # 斐讯 N1, 晶晨系列 (替代旧的 amlogic)
+          - target: ipq807x
+            subtarget: generic  # 小米 AX3600/AX9000
+          
+          # --- 进阶/其他常见架构 ---
+          - target: ipq40xx
+            subtarget: generic
+          - target: ath79
+            subtarget: generic  # 很多老款 TP-Link
+          - target: bcm27xx
+            subtarget: bcm2711  # Raspberry Pi 4
+          - target: mvebu
+            subtarget: cortexa9 # Linksys WRT 系列
+
+          # --- 如果你需要非常老的设备，可以在这里继续添加 ---
+          # 格式参考 https://downloads.openwrt.org/snapshots/targets/
+
+    steps:
+      - name: Checkout (Dummy)
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses5-dev gawk git libssl-dev gettext zlib1g-dev swig unzip time rsync python3 python3-setuptools python3-yaml
+
+      - name: Download OpenWrt Snapshot SDK
+        run: |
+          SDK_URL="https://downloads.openwrt.org/snapshots/targets/${{ matrix.target }}/${{ matrix.subtarget }}/"
+          
+          echo "Looking for SDK in: $SDK_URL"
+          
+          # 动态获取 SDK 文件名（因为 snapshot 的 hash 每天都在变）
+          FILE_NAME=$(curl -s "$SDK_URL" | grep -o 'openwrt-sdk-[^"]*\.tar\.zst' | head -n 1)
+          
+          if [ -z "$FILE_NAME" ]; then
+            echo "::error::Could not find SDK for ${{ matrix.target }}/${{ matrix.subtarget }}. It might be temporarily unavailable or renamed."
+            exit 1
+          fi
+          
+          echo "Downloading $FILE_NAME..."
+          wget -q "${SDK_URL}${FILE_NAME}"
+          
+          echo "Extracting SDK..."
+          tar -I zstd -xf "$FILE_NAME"
+          rm "$FILE_NAME"
+          mv openwrt-sdk-* sdk
+
+      - name: Clone Source & Patch Makefile
+        run: |
+          cd sdk
+          # 初始化 feeds (只需要 base 即可，加速构建)
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          
+          # 1. 拉取作者仓库 (不 fork，直接 clone)
+          echo "Cloning usteer-ng source..."
+          git clone https://github.com/NilsRo/usteer-ng.git package/usteer-ng
+          
+          # 2. 【核心步骤】修改 Makefile 解决依赖冲突
+          # 在 TITLE 字段后强制插入 PROVIDES:=usteer
+          echo "Patching Makefile for LuCI compatibility..."
+          sed -i '/TITLE:=/a \  PROVIDES:=usteer' package/usteer-ng/Makefile
+          
+          # 验证 Patch 是否成功
+          if grep -q "PROVIDES:=usteer" package/usteer-ng/Makefile; then
+            echo "✅ Patch applied successfully."
+          else
+            echo "::error::Patch failed! The Makefile format might have changed."
+            exit 1
+          fi
+
+      - name: Compile APK
+        run: |
+          cd sdk
+          make defconfig
+          
+          # 编译 (V=s 打印详细日志，-j$(nproc) 多核编译)
+          echo "Compiling usteer-ng..."
+          make package/usteer-ng/compile V=s -j$(nproc)
+
+      - name: Prepare Artifacts
+        run: |
+          mkdir -p output
+          # 搜索生成的 APK 文件
+          find sdk/bin -name "usteer-ng*.apk" -exec cp {} output/ \;
+          
+          if [ -z "$(ls -A output)" ]; then
+            echo "::error::No APK files found! Compilation might have failed."
+            exit 1
+          fi
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: usteer-ng-${{ matrix.target }}-${{ matrix.subtarget }}
+          path: output/*.apk
